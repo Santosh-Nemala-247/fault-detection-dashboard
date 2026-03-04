@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Smart Distribution Fault Dashboard — Gauges Integrated</title>
+
+  <!-- Leaflet + Heatmap + Chart.js -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#06b6d4; --danger:#ef4444; --good:#10b981;
+      --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    }
+    html,body,#app{height:100%; margin:0; background:linear-gradient(180deg,#071226 0%, #041423 100%); color:#e6eef6}
+    .app{display:grid; grid-template-columns:320px 1fr 420px; grid-template-rows:72px 1fr; gap:10px; padding:10px; height:100vh; box-sizing:border-box}
+    header{grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; padding:12px 18px; background:var(--glass); border-radius:12px}
+    header h1{font-size:20px;margin:0}
+    header .controls{display:flex; gap:10px; align-items:center}
+    .panel{background:var(--card); padding:12px; border-radius:12px; box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+
+    /* Left */
+    .left{padding:10px; overflow:auto}
+    .filter{display:flex; flex-direction:column; gap:8px}
+    select,input[type=date],input[type=text],textarea{padding:9px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:inherit; font-size:14px}
+    .fault-list{margin-top:12px; display:flex; flex-direction:column; gap:8px}
+    .fault-item{display:flex; justify-content:space-between; align-items:center; padding:10px; background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); border-radius:8px}
+    .badge{padding:5px 10px; border-radius:999px; font-size:13px}
+
+    /* Map center */
+    #map{height:calc(100vh - 170px); border-radius:10px}
+
+    /* Right */
+    .right{padding:10px; display:flex; flex-direction:column; gap:10px; overflow:auto}
+    .details{padding:12px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent)}
+
+    .gauge-row{display:flex; gap:10px}
+    .gauge-card{flex:1; padding:14px; border-radius:12px; background:linear-gradient(180deg, rgba(255,255,255,0.015), transparent); text-align:center; box-shadow: inset 0 1px 0 rgba(255,255,255,0.01), 0 6px 18px rgba(2,6,23,0.35)}
+    .gauge-title{font-size:13px; color:var(--muted); margin-bottom:8px}
+    .gauge-container{height:150px; display:flex; justify-content:center; align-items:center}
+    .gauge-container svg{width:100%; max-width:220px; overflow:visible}
+    .gauge-arc-bg{stroke:rgba(255,255,255,0.06); stroke-width:12; stroke-linecap:round; fill:none}
+    .gauge-arc{stroke-width:12; stroke-linecap:round; fill:none; transition:stroke-dasharray 450ms cubic-bezier(.2,.9,.2,1)}
+    .gauge-needle{stroke:#ffffff; stroke-width:3; stroke-linecap:round; transform-origin:50% 50%; transform-box:fill-box; transition:transform 450ms cubic-bezier(.2,.9,.2,1)}
+    .meter-value{font-size:22px; margin-top:8px; font-weight:600; letter-spacing:0.4px}
+
+    .chart-card{height:200px}
+
+    .btn{padding:9px 12px; border-radius:8px; border:none; cursor:pointer; font-size:14px}
+    .btn.accent{background:var(--accent); color:#042023}
+    .btn.danger{background:var(--danger); color:#fff}
+
+    .small{font-size:13px;color:var(--muted)}
+
+    .row-between{display:flex; gap:10px; align-items:center; justify-content:space-between}
+
+    @media (max-width:1100px){.app{grid-template-columns:1fr; grid-template-rows:72px auto auto} #map{height:350px}}
+  </style>
+</head>
+<body>
+  <div id="app" class="app">
+    <header>
+      <div>
+        <h1>Smart Distribution Fault Dashboard</h1>
+        <div class="small">Real-time faults • predictive heatmap • dispatch • community alerts</div>
+      </div>
+      <div class="controls">
+        <label class="small">Theme <select id="theme-toggle"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+        <button id="export-btn" class="btn">Export CSV</button>
+      </div>
+    </header>
+
+    <!-- Left: Filters, faults, feedback -->
+    <aside class="panel left">
+      <h3 style="margin:0 0 10px 0">Filters & Faults</h3>
+      <div class="filter">
+        <label>Street / Area <input id="filter-street" type="text" placeholder="Type street name"/></label>
+        <label>Fault Type <select id="filter-type"><option value="">All</option><option>Conductor Break</option><option>Short Circuit</option><option>Earth Fault</option><option>Overload</option></select></label>
+        <label>Date <input type="date" id="filter-date"/></label>
+        <div style="display:flex;gap:8px"><button id="btn-clear" class="btn">Clear</button><button id="btn-heat" class="btn accent">Toggle Heatmap</button></div>
+      </div>
+
+      <div class="fault-list" id="fault-list"></div>
+
+      <div style="margin-top:12px">
+        <h4 style="margin:6px 0">User Feedback</h4>
+        <textarea id="feedback-text" rows="3" placeholder="Residents report flicker, outage..." style="width:100%;"></textarea>
+        <div style="display:flex; gap:8px; margin-top:8px"><button id="btn-feedback" class="btn accent">Submit Feedback</button><div id="fb-msg" class="small"></div></div>
+      </div>
+    </aside>
+
+    <!-- Center: Map + heatmap -->
+    <main class="panel">
+      <div id="map"></div>
+    </main>
+
+    <!-- Right: Selected details, gauges, charts, dispatch -->
+    <aside class="panel right">
+      <div class="details" id="selected-details">Select a fault on the map or from the list to view details</div>
+
+      <div class="row-between">
+        <div style="flex:1">
+          <div class="small">Real-time Monitoring</div>
+
+          <!-- GAUGE ROW: both gauge visuals and textual numeric values kept (Option B) -->
+          <div class="gauge-row" style="margin-top:8px">
+            <!-- CURRENT GAUGE CARD -->
+            <div class="gauge-card">
+              <div class="gauge-title">Line Current (A)</div>
+              <div class="gauge-container">
+                <svg viewBox="0 0 100 60" aria-hidden="true">
+                  <g transform="translate(50,50)">
+                    <path d="M-40 0 A40 40 0 0 1 40 0" class="gauge-arc-bg"/>
+                    <path id="gauge-current-arc" d="M-40 0 A40 40 0 0 1 40 0" class="gauge-arc" stroke="url(#grad-current)" stroke-dasharray="0 251"/>
+                    <line id="gauge-current-needle" x1="0" y1="0" x2="0" y2="-36" class="gauge-needle" transform="rotate(-90)"/>
+                  </g>
+                  <defs>
+                    <linearGradient id="grad-current" x1="0" x2="1" y1="0" y2="0">
+                      <stop offset="0%" stop-color="#06b6d4"/>
+                      <stop offset="100%" stop-color="#1f3b4a"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
+              </div>
+
+              <!-- numeric value is kept -->
+              <div class="meter-value"><span id="current-value">0.0</span> A</div>
+              <!-- small textual readout (legacy) -->
+              <div class="small" style="margin-top:6px" id="current-val-legacy">0 A</div>
+            </div>
+
+            <!-- VOLTAGE GAUGE CARD -->
+            <div class="gauge-card">
+              <div class="gauge-title">Line Voltage (V)</div>
+              <div class="gauge-container">
+                <svg viewBox="0 0 100 60" aria-hidden="true">
+                  <g transform="translate(50,50)">
+                    <path d="M-40 0 A40 40 0 0 1 40 0" class="gauge-arc-bg"/>
+                    <path id="gauge-voltage-arc" d="M-40 0 A40 40 0 0 1 40 0" class="gauge-arc" stroke="url(#grad-voltage)" stroke-dasharray="0 251"/>
+                    <line id="gauge-voltage-needle" x1="0" y1="0" x2="0" y2="-36" class="gauge-needle" transform="rotate(-90)"/>
+                  </g>
+                  <defs>
+                    <linearGradient id="grad-voltage" x1="0" x2="1" y1="0" y2="0">
+                      <stop offset="0%" stop-color="#a78bfa"/>
+                      <stop offset="100%" stop-color="#5b21b6"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
+              </div>
+
+              <div class="meter-value"><span id="voltage-value">0</span> V</div>
+              <div class="small" style="margin-top:6px" id="voltage-val-legacy">0 V</div>
+            </div>
+          </div> <!-- /gauge-row -->
+
+        </div>
+
+        <div style="width:160px">
+          <div class="small">Impact</div>
+          <div class="details" style="text-align:center;margin-top:6px"><div id="impact-count" style="font-size:20px">0</div><div class="small">Consumers affected</div></div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; margin-top:8px">
+        <div style="flex:1">
+          <div class="small">Fault Trend (7 days)</div>
+          <canvas id="trendChart" class="chart-card"></canvas>
+        </div>
+        <div style="width:180px">
+          <div class="small">Energy Lost (Est.)</div>
+          <div class="details" style="text-align:center;margin-top:6px"><div id="energy-lost" style="font-size:20px">0 kWh</div></div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:8px; align-items:center">
+        <button id="dispatch-btn" class="btn accent">Dispatch Crew</button>
+        <button id="resolve-btn" class="btn">Mark Resolved</button>
+        <button id="notify-btn" class="btn danger">Notify Area (SMS/WhatsApp)</button>
+      </div>
+
+      <div style="margin-top:8px" class="details">
+        <strong>Crew Status</strong>
+        <div id="crew-status" class="small" style="margin-top:8px">No crew dispatched</div>
+      </div>
+    </aside>
+
+    <footer></footer>
+  </div>
+
+  <script>
+    // ----------------- Simulated data -----------------
+    const sampleFaults = [
+      {id:1,type:'Conductor Break',street:'MG Road',lat:17.437,lon:78.398,reason:'Wind/Tree contact',time:'2025-09-17T09:24:00',status:'active',consumers:120,loadKW:45},
+      {id:2,type:'Short Circuit',street:'Station Street',lat:17.439,lon:78.401,reason:'Equipment failure',time:'2025-09-16T08:50:00',status:'resolved',consumers:20,loadKW:8},
+      {id:3,type:'Earth Fault',street:'Lakeview Ave',lat:17.433,lon:78.395,reason:'Insulation breakdown',time:'2025-09-17T10:12:00',status:'active',consumers:60,loadKW:22},
+      {id:4,type:'Overload',street:'Old Town',lat:17.430,lon:78.402,reason:'Peak load',time:'2025-09-15T18:12:00',status:'resolved',consumers:40,loadKW:15}
+    ];
+
+    // Historical faults for heatmap / trend (latitude, longitude, weight)
+    const historicalPoints = sampleFaults.map(f => [f.lat, f.lon, f.status==='active'?1.2:0.6]);
+
+    // ----------------- Map setup -----------------
+    const map = L.map('map').setView([17.4375,78.398], 13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+
+    const markers = new Map();
+    const heat = L.heatLayer(historicalPoints, {radius: 30, blur: 25, maxZoom: 17});
+    let heatVisible = true; heat.addTo(map);
+
+    function addMarker(f){
+      const icon = L.circleMarker([f.lat,f.lon],{radius:8, color: f.status==='active'? '#ef4444':'#10b981', fillOpacity:0.9}).addTo(map);
+      icon.bindPopup(`<b>${f.street}</b><br>${f.type} — ${f.reason}<br><small>${new Date(f.time).toLocaleString()}</small>`);
+      icon.on('click', ()=>selectFault(f));
+      markers.set(f.id, icon);
+    }
+
+    function populate(){
+      sampleFaults.forEach(f => addMarker(f));
+      renderList(sampleFaults);
+    }
+
+    // ----------------- List & Filters -----------------
+    const listEl = document.getElementById('fault-list');
+    function renderList(data){
+      listEl.innerHTML='';
+      data.forEach(f=>{
+        const el = document.createElement('div'); el.className='fault-item';
+        el.innerHTML = `<div><strong>${f.street}</strong><div class='small'>${f.type} • ${new Date(f.time).toLocaleString()}</div></div><div><span class='badge' style='background:${f.status==='active'?'rgba(239,68,68,0.12)':'rgba(16,185,129,0.12)'}; color:${f.status==='active'?'#ef4444':'#10b981'}'>${f.status}</span></div>`;
+        el.onclick = ()=>{map.setView([f.lat,f.lon],15); if(markers.has(f.id)) markers.get(f.id).openPopup(); selectFault(f)};
+        listEl.appendChild(el);
+      });
+    }
+
+    document.getElementById('btn-clear').onclick = ()=>{document.getElementById('filter-street').value=''; document.getElementById('filter-type').value=''; document.getElementById('filter-date').value=''; renderList(sampleFaults)};
+    document.getElementById('btn-heat').onclick = ()=>{heatVisible = !heatVisible; heatVisible?heat.addTo(map):heat.remove()};
+
+    document.getElementById('btn-feedback').onclick = ()=>{const t=document.getElementById('feedback-text').value.trim(); if(!t){document.getElementById('fb-msg').textContent='Enter feedback'; setTimeout(()=>document.getElementById('fb-msg').textContent='',2000); return;} document.getElementById('fb-msg').textContent='Submitted'; document.getElementById('feedback-text').value=''; setTimeout(()=>document.getElementById('fb-msg').textContent='',2000);}
+
+    // ----------------- Selection & impact -----------------
+    let selected = null;
+    function selectFault(f){
+      selected = f;
+      const det = document.getElementById('selected-details');
+      det.innerHTML = `<strong>${f.type} — ${f.street}</strong><div class='small' style='margin-top:6px'>${f.reason}</div><div style='margin-top:6px'>Time: ${new Date(f.time).toLocaleString()}</div><div style='margin-top:6px'>Status: <strong>${f.status}</strong></div><div style='margin-top:6px'>Estimated load: <strong>${f.loadKW} kW</strong></div><div style='margin-top:6px'>Consumers affected: <strong>${f.consumers}</strong></div>`;
+      document.getElementById('impact-count').textContent = f.consumers;
+      updateEnergyLost();
+    }
+
+    function updateEnergyLost(){
+      if(!selected) {document.getElementById('energy-lost').textContent='0 kWh'; return}
+      // simple estimation: energy lost = load(kW) * downtime(hours). assume avg downtime 2 hours or assign based on status
+      const hours = selected.status==='active'? 2 : 0.5;
+      const lost = (selected.loadKW * hours).toFixed(1);
+      document.getElementById('energy-lost').textContent = `${lost} kWh`;
+    }
+
+    // ----------------- Gauges: helper -----------------
+    function setGauge(elIdPrefix, value, max) {
+      // pct 0..1
+      const pct = Math.max(0, Math.min(1, value / max));
+      const arcLen = 251; // approximate semicircle path length used for dasharray
+      const filled = Math.round(arcLen * pct);
+      const dash = `${filled} ${arcLen}`;
+      const arcEl = document.getElementById(elIdPrefix + '-arc');
+      if (arcEl) arcEl.setAttribute('stroke-dasharray', dash);
+
+      // rotate needle: -90 -> +90
+      const angle = -90 + (pct * 180);
+      const needle = document.getElementById(elIdPrefix + '-needle');
+      if (needle) {
+        // apply CSS transform rotate around element center
+        needle.style.transform = `rotate(${angle}deg)`;
+      }
+    }
+
+    // ----------------- Real-time monitoring simulation -----------------
+    // we'll update both the gauge visuals and the legacy textual readouts
+    let simCurrent = 4.0, simVoltage = 236;
+    function simulateRealtime(){
+      simCurrent = Math.max(0, simCurrent + (Math.random()-0.5)*2.2);
+      simVoltage = Math.max(160, simVoltage + (Math.random()-0.5)*4.5);
+
+      // update gauge numeric displays
+      document.getElementById('current-value').textContent = simCurrent.toFixed(1);
+      document.getElementById('voltage-value').textContent = Math.round(simVoltage);
+
+      // update legacy text boxes (kept for Option B)
+      const legacyCurrent = document.getElementById('current-val-legacy');
+      const legacyVoltage = document.getElementById('voltage-val-legacy');
+      if (legacyCurrent) legacyCurrent.textContent = simCurrent.toFixed(1) + ' A';
+      if (legacyVoltage) legacyVoltage.textContent = Math.round(simVoltage) + ' V';
+
+      // update gauge arcs/needles
+      setGauge('gauge-current', simCurrent, 100);
+      setGauge('gauge-voltage', simVoltage, 300);
+    }
+
+    simulateRealtime();
+    setInterval(simulateRealtime, 1000);
+
+    // ----------------- Trend chart -----------------
+    const trendCtx = document.getElementById('trendChart').getContext('2d');
+    const trendData = {labels:[], datasets:[{label:'Faults', data:[], tension:0.35, borderWidth:2, pointRadius:3, borderColor:'#06b6d4', backgroundColor:'rgba(6,182,212,0.06)'}]};
+    function generateTrend(){
+      const labels=[]; const data=[];
+      for(let i=6;i>=0;i--){
+        const d = new Date(); d.setDate(d.getDate()-i);
+        labels.push(d.toLocaleDateString());
+        data.push(Math.floor(Math.random()*5));
+      }
+      trendData.labels = labels; trendData.datasets[0].data = data;
+    }
+    generateTrend();
+    const trendChart = new Chart(trendCtx, {
+      type:'line',
+      data:trendData,
+      options:{
+        plugins:{legend:{display:false}},
+        scales:{
+          y:{beginAtZero:true, ticks:{stepSize:1, color:'#cbd5e1'}, grid:{color:'rgba(255,255,255,0.03)'}},
+          x:{ticks:{color:'#cbd5e1'}, grid:{display:false}}
+        },
+        elements:{point:{radius:3}}
+      }
+    });
+
+    // ----------------- Dispatch & Crew simulation -----------------
+    let crewState = 'idle';
+    document.getElementById('dispatch-btn').onclick = ()=>{
+      if(!selected){alert('Select a fault first'); return}
+      crewState = 'dispatched'; updateCrew('Dispatched: Crew en route (ETA ~ 20 min)');
+      setTimeout(()=>{crewState='on-site'; updateCrew('Crew on-site — diagnosing');}, 12000);
+      setTimeout(()=>{crewState='fixing'; updateCrew('Repair in progress');}, 24000);
+      setTimeout(()=>{crewState='resolved'; if(selected){selected.status='resolved'}; updateCrew('Resolved — crew left'); document.getElementById('resolve-btn').disabled=true; renderList(sampleFaults); updateEnergyLost();}, 42000);
+    }
+    function updateCrew(txt){document.getElementById('crew-status').textContent = txt;}
+    document.getElementById('resolve-btn').onclick = ()=>{ if(!selected){alert('Select a fault'); return} selected.status='resolved'; renderList(sampleFaults); updateCrew('Marked resolved by operator'); updateEnergyLost(); }
+
+    document.getElementById('notify-btn').onclick = ()=>{ if(!selected){alert('Select a fault'); return} alert(`Simulated: Notifications sent to ${selected.consumers} subscribers near ${selected.street}`); }
+
+    // ----------------- Theme & export -----------------
+    document.getElementById('theme-toggle').onchange = (e)=>{
+      if(e.target.value==='light'){
+        document.body.style.background='linear-gradient(180deg,#f4f7fb,#eaf1f8)';
+        document.querySelectorAll('.panel').forEach(p=>p.style.background='#ffffff');
+        document.querySelectorAll('.small').forEach(s=>s.style.color='#334155');
+        document.querySelectorAll('.gauge-title').forEach(t=>t.style.color='#475569');
+      } else {
+        document.body.style.background='linear-gradient(180deg,#071226 0%, #041423 100%)';
+        document.querySelectorAll('.panel').forEach(p=>p.style.background='var(--card)');
+        document.querySelectorAll('.small').forEach(s=>s.style.color='var(--muted)');
+        document.querySelectorAll('.gauge-title').forEach(t=>t.style.color='var(--muted)');
+      }
+    }
+
+    document.getElementById('export-btn').onclick = ()=>{
+      const rows = ['id,street,type,time,status,consumers,loadKW'];
+      sampleFaults.forEach(f=>rows.push([f.id,`"${f.street}"`,f.type,f.time,f.status,f.consumers,f.loadKW].join(',')));
+      const blob = new Blob([rows.join('\n')], {type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='faults.csv'; a.click(); URL.revokeObjectURL(url);
+    }
+
+    // ----------------- Predictive heatmap update -----------------
+    function updateHeatmapWithPrediction(){
+      const weights = {};
+      sampleFaults.forEach(f=>{weights[f.street] = (weights[f.street]||0) + (f.status==='active'?2:1)});
+      const newPoints = sampleFaults.map(f => [f.lat, f.lon, (weights[f.street]||1) * (f.status==='active'?1.5:0.7)]);
+      heat.setLatLngs(newPoints);
+    }
+
+    // ----------------- Init -----------------
+    populate(); updateHeatmapWithPrediction();
+    selectFault(sampleFaults[0]);
+
+    // filters (simple)
+    document.getElementById('filter-street').oninput = (e)=>{ const q=e.target.value.toLowerCase(); renderList(sampleFaults.filter(f=>f.street.toLowerCase().includes(q)))};
+    document.getElementById('filter-type').onchange = (e)=>{ const t=e.target.value; renderList(t? sampleFaults.filter(f=>f.type===t): sampleFaults)};
+    document.getElementById('filter-date').onchange = (e)=>{ const d=e.target.value; renderList(d? sampleFaults.filter(f=>f.time.startsWith(d)): sampleFaults)};
+
+  </script>
+</body>
+</html>
+
