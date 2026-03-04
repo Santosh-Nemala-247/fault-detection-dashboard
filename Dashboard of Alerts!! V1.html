@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Distribution Fault Dashboard</title>
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#94a3b8; --accent:#06b6d4; --danger:#ef4444; 
+      --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body,#app{height:100%; margin:0; background:linear-gradient(180deg,#071226 0%, #041423 100%); color:#e6eef6}
+    .app{display:grid; grid-template-columns:280px 1fr 400px; grid-template-rows:70px 1fr; gap:10px; padding:10px; height:100vh; box-sizing:border-box}
+    header{grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; padding:14px 20px; background:var(--glass); border-radius:12px; box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+    header .title{display:flex; gap:14px; align-items:center}
+    header h1{font-size:22px;margin:0}
+    header .stats{display:flex; gap:14px; align-items:center}
+    .stat{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent); padding:10px 14px; border-radius:10px; text-align:center; min-width:110px}
+    .stat small{display:block;color:var(--muted); font-size:13px}
+    .stat strong{display:block; font-size:18px}
+
+    .panel{background:var(--card); padding:14px; border-radius:12px; box-shadow:0 6px 18px rgba(2,6,23,0.6)}
+    .left{padding:14px; overflow:auto}
+    .filter{display:flex; flex-direction:column; gap:6px}
+    select,input[type=date]{padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.04); background:transparent; color:inherit; font-size:14px}
+    .fault-list{margin-top:10px; display:flex; flex-direction:column; gap:6px}
+    .fault-item{display:flex; justify-content:space-between; align-items:center; padding:12px; background:linear-gradient(180deg, rgba(255,255,255,0.01), transparent); border-radius:8px; font-size:14px}
+    .badge{padding:5px 10px; border-radius:999px; font-size:13px}
+
+    #map{height:calc(100vh - 150px); border-radius:10px; overflow:hidden}
+
+    .right{padding:14px; display:flex; flex-direction:column; gap:10px; overflow:auto}
+    .card-title{display:flex; justify-content:space-between; align-items:center; font-size:15px}
+    .details{padding:14px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent); font-size:14px}
+
+    .gauge-row{display:flex; gap:10px}
+    .gauge{flex:1; padding:14px; border-radius:8px; background:linear-gradient(180deg, rgba(255,255,255,0.015), transparent); text-align:center; font-size:14px}
+    .meter{height:150px; display:flex; align-items:center; justify-content:center}
+    .meter svg{width:100%; max-width:180px}
+    .meter-value{font-size:22px; margin-top:10px}
+
+    .btn{padding:10px 14px; border-radius:8px; border:none; cursor:pointer; font-size:14px}
+    .btn.accent{background:var(--accent); color:#042023}
+    .btn.danger{background:var(--danger); color:#fff}
+
+    footer{grid-column:1/-1; display:flex; gap:12px; align-items:center; justify-content:flex-end}
+
+    @media (max-width:1000px){
+      .app{grid-template-columns:1fr; grid-template-rows:70px auto auto;}
+      #map{height:350px}
+    }
+  </style>
+</head>
+<body>
+  <div id="app" class="app">
+    <header>
+      <div class="title">
+        <h1>Distribution Fault Dashboard</h1>
+      </div>
+      <div class="stats">
+        <div class="stat"><small>Active Faults</small><strong id="stat-active">0</strong></div>
+        <div class="stat"><small>Resolved Today</small><strong id="stat-resolved">0</strong></div>
+        <div class="stat"><small>System Health</small><strong id="stat-health">Good</strong></div>
+      </div>
+    </header>
+
+    <aside class="panel left">
+      <h3 style="margin:0 0 12px 0">Filters & Faults</h3>
+      <div class="filter">
+        <label>Street / Area<select id="filter-street"><option value="">All</option></select></label>
+        <label>Fault Type<select id="filter-type"><option value="">All</option><option>Conductor Break</option><option>Short Circuit</option><option>Earth Fault</option><option>Overload</option></select></label>
+        <label>Date <input type="date" id="filter-date"/></label>
+        <button class="btn accent" id="btn-clear">Clear Filters</button>
+      </div>
+      <div class="fault-list" id="fault-list"></div>
+    </aside>
+
+    <main class="panel" style="padding:10px">
+      <div id="map"></div>
+    </main>
+
+    <aside class="panel right">
+      <div class="card-title"><h3 style="margin:0">Selected Fault</h3><button class="btn" id="btn-notify">Notify Public</button></div>
+      <div class="details" id="selected-details">Select a fault on the map or list to see details</div>
+
+      <div class="card-title"><h3 style="margin:0">Real-time Monitoring</h3></div>
+      <div class="gauge-row">
+        <div class="gauge">
+          <div style="font-size:13px;color:var(--muted)">Line Current (A)</div>
+          <div class="meter">
+            <svg viewBox="0 0 100 60" id="gauge-current"><g transform="translate(50,50)">
+              <path d="M-40 0 A40 40 0 0 1 40 0" fill="none" stroke="#29414a" stroke-width="10" stroke-linecap="round"/>
+              <path id="gauge-current-arc" d="M-40 0 A40 40 0 0 1 40 0" fill="none" stroke="#06b6d4" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 251"/>
+              <line id="gauge-current-needle" x1="0" y1="0" x2="0" y2="-36" stroke="#e6eef6" stroke-width="2"/>
+            </g></svg>
+          </div>
+          <div class="meter-value"><span id="current-value">0</span> A</div>
+        </div>
+        <div class="gauge">
+          <div style="font-size:13px;color:var(--muted)">Line Voltage (V)</div>
+          <div class="meter">
+            <svg viewBox="0 0 100 60" id="gauge-voltage"><g transform="translate(50,50)">
+              <path d="M-40 0 A40 40 0 0 1 40 0" fill="none" stroke="#29414a" stroke-width="10" stroke-linecap="round"/>
+              <path id="gauge-voltage-arc" d="M-40 0 A40 40 0 0 1 40 0" fill="none" stroke="#a78bfa" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 251"/>
+              <line id="gauge-voltage-needle" x1="0" y1="0" x2="0" y2="-36" stroke="#e6eef6" stroke-width="2"/>
+            </g></svg>
+          </div>
+          <div class="meter-value"><span id="voltage-value">0</span> V</div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px" class="details">
+        <strong>Historical Log (last 10)</strong>
+        <div id="history" style="margin-top:8px; max-height:220px; overflow:auto"></div>
+      </div>
+    </aside>
+
+    <footer></footer>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const sampleFaults = [
+      {id:1,type:'Conductor Break',street:'MG Road',lat:17.437,lon:78.398,reason:'Wind/Tree contact',time:'2025-09-17T09:24:00',status:'active'},
+      {id:2,type:'Short Circuit',street:'Station Street',lat:17.439,lon:78.401,reason:'Equipment failure',time:'2025-09-17T08:50:00',status:'resolved'},
+      {id:3,type:'Earth Fault',street:'Lakeview Ave',lat:17.433,lon:78.395,reason:'Insulation breakdown',time:'2025-09-17T10:12:00',status:'active'}
+    ];
+
+    const map = L.map('map').setView([17.4375,78.398], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19}).addTo(map);
+    const markers = new Map();
+
+    const filterStreet = document.getElementById('filter-street');
+    const listEl = document.getElementById('fault-list');
+    const statActive = document.getElementById('stat-active');
+    const statResolved = document.getElementById('stat-resolved');
+
+    function renderFilters(data){
+      const streets = Array.from(new Set(data.map(d=>d.street)));
+      streets.forEach(s=>{const opt=document.createElement('option'); opt.value=s; opt.textContent=s; filterStreet.appendChild(opt)});
+    }
+
+    function addMarker(f){
+      const m = L.marker([f.lat,f.lon]).addTo(map).bindPopup(`<b>${f.street}</b><br>${f.type}<br>${f.reason}`);
+      m.on('click', ()=>selectFault(f));
+      markers.set(f.id,m);
+    }
+
+    function renderList(data){
+      listEl.innerHTML='';
+      data.forEach(f=>{
+        const item=document.createElement('div'); item.className='fault-item';
+        item.innerHTML=`<div><strong>${f.street}</strong><div style="color:var(--muted);font-size:12px">${f.type} • ${new Date(f.time).toLocaleString()}</div></div><div><span class="badge" style="background:${f.status==='active'? 'rgba(239,68,68,0.12)':'rgba(16,185,129,0.12)'}; color:${f.status==='active'? 'var(--danger)': '#10b981'}">${f.status}</span></div>`;
+        item.onclick = ()=>{map.setView([f.lat,f.lon],16); if(markers.has(f.id)) markers.get(f.id).openPopup(); selectFault(f)};
+        listEl.appendChild(item);
+      });
+    }
+
+    function refreshAll(){
+      markers.forEach(m=>map.removeLayer(m)); markers.clear();
+      sampleFaults.forEach(f=>addMarker(f));
+      renderList(sampleFaults);
+      statActive.textContent = sampleFaults.filter(s=>s.status==='active').length;
+      statResolved.textContent = sampleFaults.filter(s=>s.status==='resolved').length;
+    }
+
+    function selectFault(f){
+      const sel = document.getElementById('selected-details');
+      sel.innerHTML = `<strong>${f.type} — ${f.street}</strong><div style="color:var(--muted);margin-top:6px">${f.reason}</div><div style="margin-top:6px">Time: ${new Date(f.time).toLocaleString()}</div><div style="margin-top:6px">Status: <strong>${f.status}</strong></div><div style="margin-top:8px"><button class='btn accent' onclick='markResolved(${f.id})'>Mark Resolved</button></div>`;
+    }
+
+    function markResolved(id){
+      const f = sampleFaults.find(x=>x.id===id); if(!f) return; f.status='resolved'; refreshAll();
+      historyAdd(`Fault ${id} resolved at ${new Date().toLocaleString()}`);
+    }
+
+    function historyAdd(txt){
+      const h = document.getElementById('history'); const el = document.createElement('div'); el.style.padding='6px 0'; el.textContent = txt; h.prepend(el); while(h.children.length>10) h.removeChild(h.lastChild);
+    }
+
+    function setGauge(elId, value, max){
+      const pct = Math.max(0, Math.min(1, value / max));
+      const arcLen = 251;
+      const dash = `${Math.round(arcLen * pct)} ${arcLen}`;
+      document.getElementById(elId+'-arc').setAttribute('stroke-dasharray', dash);
+      const angle = -90 + (pct * 180);
+      document.getElementById(elId+'-needle').setAttribute('transform', `rotate(${angle})`);
+    }
+
+    let simulatedCurrent = 5; let simulatedVoltage = 230;
+    function simulateUpdates(){
+      simulatedCurrent = Math.max(0, simulatedCurrent + (Math.random()-0.5)*4);
+      simulatedVoltage = Math.max(180, simulatedVoltage + (Math.random()-0.5)*8);
+      document.getElementById('current-value').textContent = simulatedCurrent.toFixed(1);
+      document.getElementById('voltage-value').textContent = simulatedVoltage.toFixed(0);
+      setGauge('gauge-current', simulatedCurrent, 100);
+      setGauge('gauge-voltage', simulatedVoltage, 300);
+    }
+
+    renderFilters(sampleFaults);
+    refreshAll();
+    simulateUpdates();
+    setInterval(simulateUpdates, 1000);
+
+    document.getElementById('btn-clear').onclick = ()=>{filterStreet.value=''; document.getElementById('filter-type').value=''; document.getElementById('filter-date').value=''; refreshAll();}
+    document.getElementById('filter-street').onchange = ()=>{const s = filterStreet.value; renderList(s? sampleFaults.filter(f=>f.street===s): sampleFaults)}
+    document.getElementById('btn-notify').onclick = ()=>{alert('Public notified near the selected area'); historyAdd('Public notified at '+new Date().toLocaleString())}
+  </script>
+</body>
+</html>
