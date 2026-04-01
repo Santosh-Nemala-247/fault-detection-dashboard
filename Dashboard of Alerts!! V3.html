@@ -285,7 +285,7 @@
       simCurrent = Math.max(0, simCurrent + (Math.random()-0.5)*2.2);
       simVoltage = Math.max(160, simVoltage + (Math.random()-0.5)*4.5);
 
-      // update gauge numeric displays
+      
       document.getElementById('current-value').textContent = simCurrent.toFixed(1);
       document.getElementById('voltage-value').textContent = Math.round(simVoltage);
 
