@@ -295,7 +295,7 @@
       if (legacyCurrent) legacyCurrent.textContent = simCurrent.toFixed(1) + ' A';
       if (legacyVoltage) legacyVoltage.textContent = Math.round(simVoltage) + ' V';
 
-      // update gauge arcs/needles
+     
       setGauge('gauge-current', simCurrent, 100);
       setGauge('gauge-voltage', simVoltage, 300);
     }
